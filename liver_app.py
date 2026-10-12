@@ -11,6 +11,24 @@ LABELS = {
     'BIL': 'Bilirubin (BIL)', 'CHE': 'Cholinesterase (CHE)', 'CHOL': 'Cholesterol (CHOL)',
     'CREA': 'Creatinine (CREA)', 'GGT': 'Gamma-glutamyl transferase (GGT)', 'PROT': 'Protein (PROT)',
 }
+def distribution_chart(data, measurement, title, bins):
+    """Use consistent, readable styling for frequency distributions."""
+    chart = px.histogram(data, x=measurement, nbins=bins, labels=LABELS,
+                         title=title, color_discrete_sequence=['#2563EB'],
+                         template='plotly_white')
+    chart.update_traces(marker_line_color='white', marker_line_width=1,
+                        hovertemplate=LABELS[measurement] + ' range: %{x}<br>Records: %{y}<extra></extra>')
+    chart.update_layout(height=380, bargap=0.06, showlegend=False,
+                        margin=dict(l=20, r=20, t=60, b=50),
+                        title=dict(x=0, font=dict(size=20)),
+                        xaxis_title=LABELS[measurement], yaxis_title='Number of records',
+                        font=dict(size=14), hovermode='closest')
+    chart.update_xaxes(showgrid=False, zeroline=False)
+    chart.update_yaxes(rangemode='tozero', dtick=1 if len(data) < 20 else None,
+                       gridcolor='#E5E7EB', zeroline=False)
+    return chart
+
+
 st.set_page_config(page_title='Liver Data Explorer', layout='wide')
 st.title('Liver Data Explorer')
 st.write('Explore the records, understand distributions, and compare groups one measurement at a time.')
@@ -35,6 +53,10 @@ with preview:
     st.subheader('Missing measurements')
     missing = frame[NUMERIC].isna().sum().rename('Missing values').to_frame()
     st.dataframe(missing, width='stretch')
+    st.plotly_chart(px.bar(missing.reset_index(names='Measurement'),
+                           x='Missing values', y='Measurement', orientation='h',
+                           title='Missing measurements in the full dataset',
+                           text='Missing values'), width='stretch')
     st.caption('Missing values are preserved. Each chart excludes only records missing its selected measurement.')
     st.subheader('Missing Data Review')
     st.caption('Checks the full loaded dataset, independently of sidebar filters. Blanks, whitespace, NA, N/A, and null are missing; zero is valid.')
@@ -94,17 +116,22 @@ with overview:
         ages = filtered['Age'].dropna()
         b.metric('Age range', f'{ages.min():g}–{ages.max():g}' if not ages.empty else 'Unavailable')
         c.metric('Missing numeric values', int(filtered[NUMERIC].isna().sum().sum()))
+        st.caption(f'{int(filtered[NUMERIC].isna().any(axis=1).sum()):,} selected records have at least one missing measurement. Records remain available for other charts.')
+        with st.expander('Missing-value counts in the selected subset'):
+            st.dataframe(filtered[NUMERIC].isna().sum().rename('Missing values').to_frame(), width='stretch')
         counts = filtered.groupby('Category').size().reset_index(name='Records')
         st.plotly_chart(px.bar(counts, x='Category', y='Records', title='Records by category', text='Records'), width='stretch')
         st.caption('Bar height shows group size. Unequal group sizes matter when interpreting comparisons.')
-        st.plotly_chart(px.histogram(filtered, x='Age', nbins=20, title='Age distribution'), width='stretch')
+        st.plotly_chart(distribution_chart(filtered.dropna(subset=['Age']), 'Age',
+                                           'Age distribution', 15), width='stretch')
         st.caption(f'A histogram counts records within ranges. Age missing for {filtered["Age"].isna().sum()} selected records.')
         measurement = st.selectbox('Explore a laboratory measurement', NUMERIC[1:], format_func=lambda name: LABELS[name])
         values = filtered.dropna(subset=[measurement])
         if values.empty:
             st.info('No recorded values for this measurement in the selected subset.')
         else:
-            st.plotly_chart(px.histogram(values, x=measurement, nbins=30, labels=LABELS, title=f'Distribution of {LABELS[measurement]}'), width='stretch')
+            st.plotly_chart(distribution_chart(values, measurement,
+                                               f'Distribution of {LABELS[measurement]}', 25), width='stretch')
         st.caption(f'{len(values)} usable records; {len(filtered) - len(values)} missing values excluded. Wide ranges can reflect extreme observations.')
 
 with compare:
@@ -126,3 +153,12 @@ with compare:
         summary = values.groupby(grouping)[measurement].agg(Count='count', Median='median', Q1=lambda x: x.quantile(.25), Q3=lambda x: x.quantile(.75))
         st.dataframe(summary.round(2), width='stretch')
         st.caption(f'{len(values)} usable records; {len(filtered) - len(values)} missing values excluded. Small groups have less stable summaries. Differences describe this dataset and do not establish causes.')
+    if st.checkbox('Show ALT versus AST relationship', value=False):
+        paired = filtered.dropna(subset=['ALT', 'AST'])
+        if paired.empty:
+            st.info('No records have both ALT and AST in the selected subset. Adjust the filters.')
+        else:
+            st.plotly_chart(px.scatter(paired, x='ALT', y='AST', color='Category',
+                                      labels=LABELS, title='ALT versus AST by category',
+                                      hover_data=['Age', 'Sex']), width='stretch')
+            st.caption(f'{len(paired):,} usable records; {len(filtered) - len(paired):,} missing ALT or AST excluded. Each point is one record; association does not establish causation.')
